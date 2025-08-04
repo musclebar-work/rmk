@@ -679,11 +679,11 @@
     <div id="saveStatus" class="save-status">Сохранено</div>
 
     <script>
-        // Конфигурация
+        // Конфигурация (ЗАМЕНИТЕ НА СВОИ ДАННЫЕ)
         const GITHUB_USER = "musclebar-work";
         const REPO_NAME = "rmk";
         const DATA_FILE = "data.json";
-        const GITHUB_TOKEN = "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"; // ЗАМЕНИТЕ НА ВАШ ТОКЕН
+        const GITHUB_TOKEN = "ghp_your_token_here"; // Замените на ваш токен
 
         // Данные приложения
         let products = [];
@@ -698,7 +698,6 @@
         };
         let reports = [];
         let withdrawalsHistory = [];
-        let saveTimeout;
 
         // DOM элементы
         const tabContents = document.querySelectorAll('.tab-content');
@@ -750,21 +749,15 @@
             setTimeout(() => saveStatus.classList.remove('visible'), 2000);
         }
 
-        function scheduleSave() {
-            clearTimeout(saveTimeout);
-            saveTimeout = setTimeout(saveData, 3000);
-        }
-
         async function saveData() {
             const data = prepareData();
-            const content = btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2)));
+            const content = btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2))));
             
             // Всегда сохраняем в localStorage
             localStorage.setItem('rmk-data', JSON.stringify(data));
-            localStorage.setItem('rmk-last-updated', data.lastUpdated);
             
             try {
-                // 1. Получаем текущий SHA файла (нужен для обновления)
+                // 1. Получаем текущий SHA файла
                 const getResponse = await fetch(`https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${DATA_FILE}`, {
                     headers: {
                         'Authorization': `token ${GITHUB_TOKEN}`,
@@ -791,7 +784,7 @@
                     body: JSON.stringify({
                         message: 'Auto-update from RMK POS',
                         content: content,
-                        sha: sha // если null, файл будет создан
+                        sha: sha
                     })
                 });
                 
@@ -844,26 +837,21 @@
                     const fileInfo = await response.json();
                     const content = JSON.parse(atob(fileInfo.content));
                     
-                    // Обновляем данные только если версия из GitHub новее
-                    const localUpdated = localStorage.getItem('rmk-last-updated');
-                    if (!localUpdated || new Date(content.lastUpdated) > new Date(localUpdated)) {
-                        products = content.products || [];
-                        receipts = content.receipts || [];
-                        cashRegister = content.cashRegister || {
-                            startAmount: 0,
-                            salesTotal: 0,
-                            withdrawals: 0,
-                            isShiftActive: false,
-                            endAmount: null
-                        };
-                        reports = content.reports || [];
-                        withdrawalsHistory = content.withdrawals || [];
-                        console.log("✅ Данные загружены из GitHub");
-                        
-                        // Сохраняем локально как кэш
-                        localStorage.setItem('rmk-data', JSON.stringify(content));
-                        localStorage.setItem('rmk-last-updated', content.lastUpdated);
-                    }
+                    products = content.products || [];
+                    receipts = content.receipts || [];
+                    cashRegister = content.cashRegister || {
+                        startAmount: 0,
+                        salesTotal: 0,
+                        withdrawals: 0,
+                        isShiftActive: false,
+                        endAmount: null
+                    };
+                    reports = content.reports || [];
+                    withdrawalsHistory = content.withdrawals || [];
+                    console.log("✅ Данные загружены из GitHub");
+                    
+                    // Сохраняем локально как кэш
+                    localStorage.setItem('rmk-data', JSON.stringify(content));
                 }
             } catch (error) {
                 console.log("⚠ Ошибка загрузки из GitHub:", error);
@@ -892,7 +880,7 @@
             productsListEl.innerHTML = '';
             
             if (productsToRender.length === 0) {
-                productsListEl.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 20px; color: var(--gray);">Товары не найдены</td></tr>';
+                productsListEl.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 20px;">Товары не найдены</td></tr>';
                 return;
             }
             
@@ -900,7 +888,7 @@
                 const tr = document.createElement('tr');
                 tr.className = 'fade-in-up';
                 tr.innerHTML = `
-                    <td>${highlightSearchTerm(product.name)}</td>
+                    <td>${product.name}</td>
                     <td><span class="badge">${product.barcode}</span></td>
                     <td>${product.price} ₽</td>
                     <td>
@@ -909,14 +897,6 @@
                 `;
                 productsListEl.appendChild(tr);
             });
-        }
-
-        function highlightSearchTerm(text) {
-            const searchTerm = catalogSearchInput.value.trim();
-            if (!searchTerm) return text;
-            
-            const regex = new RegExp(`(${searchTerm})`, 'gi');
-            return text.replace(regex, '<span class="highlight">$1</span>');
         }
 
         function searchInCatalog() {
@@ -950,13 +930,12 @@
             }
             
             products.push({ name, barcode, price });
-            scheduleSave();
+            saveData();
             
             productNameInput.value = '';
             productBarcodeInput.value = '';
             productPriceInput.value = '';
             renderProducts();
-            catalogSearchInput.value = '';
         }
 
         function renderCart() {
@@ -964,7 +943,7 @@
             let total = 0;
             
             if (currentCart.length === 0) {
-                cartItemsEl.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--gray);">Корзина пуста</div>';
+                cartItemsEl.innerHTML = '<div style="padding: 20px; text-align: center;">Корзина пуста</div>';
                 totalEl.textContent = '0';
                 return;
             }
@@ -1000,11 +979,9 @@
                 });
                 renderCart();
                 barcodeInput.value = '';
-                barcodeInput.focus();
                 searchResultsEl.style.display = 'none';
             } else {
                 alert('Товар не найден! Проверьте штрих-код или название.');
-                barcodeInput.select();
             }
         }
 
@@ -1067,7 +1044,7 @@
             
             receipts.push(receipt);
             cashRegister.salesTotal += total;
-            scheduleSave();
+            saveData();
             
             currentCart = [];
             renderCart();
@@ -1076,7 +1053,6 @@
             floatingChangeEl.style.display = 'none';
             
             renderHistory();
-            barcodeInput.focus();
         }
 
         function startShift() {
@@ -1094,12 +1070,9 @@
                 endAmount: null
             };
             
-            scheduleSave();
+            saveData();
             updateCashDisplay();
             cashAmountInput.value = '';
-            
-            currentShiftStatusEl.textContent = 'Смена активна';
-            currentShiftStatusEl.className = 'shift-status active';
         }
 
         function endShift() {
@@ -1125,7 +1098,7 @@
             };
             
             reports.push(report);
-            scheduleSave();
+            saveData();
             
             cashRegister = {
                 startAmount: 0,
@@ -1134,9 +1107,6 @@
                 isShiftActive: false,
                 endAmount: null
             };
-            
-            currentShiftStatusEl.textContent = 'Смена не начата';
-            currentShiftStatusEl.className = 'shift-status inactive';
             
             updateCashDisplay();
             renderReports();
@@ -1170,7 +1140,7 @@
                 comment: 'Выемка средств'
             });
             
-            scheduleSave();
+            saveData();
             updateCashDisplay();
             withdrawAmountInput.value = '';
         }
@@ -1190,10 +1160,6 @@
             displaySalesTotalEl.textContent = cashRegister.salesTotal;
             displayWithdrawalsEl.textContent = cashRegister.withdrawals;
             displayTotalCashEl.textContent = totalCash;
-            
-            startShiftBtn.disabled = cashRegister.isShiftActive;
-            endShiftBtn.disabled = !cashRegister.isShiftActive;
-            withdrawCashBtn.disabled = !cashRegister.isShiftActive;
         }
 
         function renderHistory() {
@@ -1224,7 +1190,7 @@
             historyListEl.innerHTML = '';
             
             if (Object.keys(groupedByDate).length === 0) {
-                historyListEl.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px; color: var(--gray);">Нет данных о продажах</td></tr>';
+                historyListEl.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px;">Нет данных о продажах</td></tr>';
                 return;
             }
             
@@ -1246,7 +1212,7 @@
             reportsListEl.innerHTML = '';
             
             if (reports.length === 0) {
-                reportsListEl.innerHTML = '<div style="padding: 15px; text-align: center; color: var(--gray);">Нет сохраненных отчетов</div>';
+                reportsListEl.innerHTML = '<div style="padding: 15px; text-align: center;">Нет сохраненных отчетов</div>';
                 return;
             }
             
@@ -1313,7 +1279,7 @@
         window.deleteProduct = function(index) {
             if (confirm('Удалить товар?')) {
                 products.splice(index, 1);
-                scheduleSave();
+                saveData();
                 renderProducts();
             }
         };
@@ -1365,6 +1331,7 @@
             historyDateInput.valueAsDate = new Date();
             barcodeInput.focus();
             
+            // Назначение обработчиков событий
             tabs.forEach(tab => tab.addEventListener('click', switchTab));
             addProductBtn.addEventListener('click', addNewProduct);
             startShiftBtn.addEventListener('click', startShift);
@@ -1379,3 +1346,4 @@
     </script>
 </body>
 </html>
+
