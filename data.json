@@ -1,1 +1,14 @@
-
+{
+  "products": [
+    { "name": "Чай", "barcode": "111", "price": 100 },
+    { "name": "Кофе", "barcode": "222", "price": 150 }
+  ],
+  "receipts": [],
+  "cashRegister": {
+    "startAmount": 1000,
+    "salesTotal": 0,
+    "withdrawals": 0,
+    "isShiftActive": false
+  },
+  "lastUpdated": "2023-11-20T12:00:00.000Z"
+}
