@@ -554,6 +554,19 @@
             z-index: 1000;
         }
         .save-status.visible { opacity: 1; }
+
+        .token-manager {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            z-index: 1000;
+        }
+        .token-manager button {
+            padding: 8px 12px;
+            font-size: 12px;
+            min-width: auto;
+            border-radius: 20px;
+        }
     </style>
 </head>
 <body>
@@ -678,11 +691,16 @@
     <div id="floating-change" class="floating-change"></div>
     <div id="saveStatus" class="save-status">Сохранено</div>
 
+    <div class="token-manager">
+        <button id="token-manager-btn">GitHub Token</button>
+    </div>
+
     <script>
         // Конфигурация
         const GITHUB_USER = "musclebar-work";
         const REPO_NAME = "rmk";
         const DATA_FILE = "data.json";
+        let GITHUB_TOKEN = localStorage.getItem('github-token') || null;
 
         // Данные приложения
         let products = [];
@@ -697,6 +715,7 @@
         };
         let reports = [];
         let withdrawalsHistory = [];
+        let saveTimeout;
 
         // DOM элементы
         const tabContents = document.querySelectorAll('.tab-content');
@@ -730,32 +749,9 @@
         const catalogSearchInput = document.getElementById('catalog-search-input');
         const reportsListEl = document.getElementById('reports-list');
         const saveStatus = document.getElementById('saveStatus');
+        const tokenManagerBtn = document.getElementById('token-manager-btn');
 
-        // ========== СИСТЕМА АВТОСОХРАНЕНИЯ ==========
-        async function loadData() {
-            try {
-                const response = await fetch(`https://raw.githubusercontent.com/${GITHUB_USER}/${REPO_NAME}/main/${DATA_FILE}?t=${Date.now()}`);
-                const data = await response.json();
-                
-                products = data.products || [];
-                receipts = data.receipts || [];
-                cashRegister = data.cashRegister || {
-                    startAmount: 0,
-                    salesTotal: 0,
-                    withdrawals: 0,
-                    isShiftActive: false,
-                    endAmount: null
-                };
-                reports = data.reports || [];
-                withdrawalsHistory = data.withdrawals || [];
-                
-                console.log("✅ Данные загружены из GitHub");
-                renderAll();
-            } catch (error) {
-                console.log("⚠ Используем начальные данные (файл не найден)");
-            }
-        }
-
+        // ========== СИСТЕМА СОХРАНЕНИЯ ==========
         function prepareData() {
             return {
                 products,
@@ -767,18 +763,154 @@
             };
         }
 
-        function saveDataToConsole() {
-            const data = prepareData();
-            const jsonData = JSON.stringify(data, null, 2);
-            
-            console.log("=== Скопируйте этот JSON и обновите data.json вручную ===");
-            console.log(jsonData);
-            console.log("=======================================================");
-            
-            showSaveStatus();
+        function showSaveStatus() {
+            saveStatus.classList.add('visible');
+            setTimeout(() => saveStatus.classList.remove('visible'), 2000);
         }
 
-        setInterval(saveDataToConsole, 30000);
+        function scheduleSave() {
+            clearTimeout(saveTimeout);
+            saveTimeout = setTimeout(saveData, 3000);
+        }
+
+        async function saveData() {
+            const data = prepareData();
+            const content = btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2)));
+            
+            // Всегда сохраняем в localStorage
+            localStorage.setItem('rmk-data', JSON.stringify(data));
+            localStorage.setItem('rmk-last-updated', data.lastUpdated);
+            
+            // Если нет токена - пропускаем сохранение в GitHub
+            if (!GITHUB_TOKEN) return;
+            
+            try {
+                // 1. Получаем текущий SHA файла (нужен для обновления)
+                const getResponse = await fetch(`https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${DATA_FILE}`, {
+                    headers: {
+                        'Authorization': `token ${GITHUB_TOKEN}`,
+                        'Accept': 'application/vnd.github.v3+json'
+                    }
+                });
+                
+                let sha = null;
+                if (getResponse.ok) {
+                    const fileInfo = await getResponse.json();
+                    sha = fileInfo.sha;
+                } else if (getResponse.status !== 404) {
+                    throw new Error('Ошибка при получении файла');
+                }
+                
+                // 2. Отправляем обновление
+                const updateResponse = await fetch(`https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${DATA_FILE}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Authorization': `token ${GITHUB_TOKEN}`,
+                        'Accept': 'application/vnd.github.v3+json',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: 'Auto-update from RMK POS',
+                        content: content,
+                        sha: sha // если null, файл будет создан
+                    })
+                });
+                
+                if (!updateResponse.ok) {
+                    throw new Error('Ошибка при сохранении');
+                }
+                
+                showSaveStatus();
+                console.log('✅ Данные сохранены в GitHub');
+            } catch (error) {
+                console.error('GitHub Error:', error);
+                // В случае ошибки данные уже сохранены в localStorage
+            }
+        }
+
+        async function loadData() {
+            // Пробуем загрузить из localStorage
+            const localData = localStorage.getItem('rmk-data');
+            if (localData) {
+                try {
+                    const data = JSON.parse(localData);
+                    products = data.products || [];
+                    receipts = data.receipts || [];
+                    cashRegister = data.cashRegister || {
+                        startAmount: 0,
+                        salesTotal: 0,
+                        withdrawals: 0,
+                        isShiftActive: false,
+                        endAmount: null
+                    };
+                    reports = data.reports || [];
+                    withdrawalsHistory = data.withdrawals || [];
+                    console.log("✅ Данные загружены из localStorage");
+                    renderAll();
+                } catch (e) {
+                    console.log("⚠ Ошибка загрузки из localStorage");
+                }
+            }
+            
+            // Затем пробуем GitHub
+            try {
+                const response = await fetch(`https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${DATA_FILE}`, {
+                    headers: GITHUB_TOKEN ? {
+                        'Authorization': `token ${GITHUB_TOKEN}`,
+                        'Accept': 'application/vnd.github.v3+json'
+                    } : {}
+                });
+                
+                if (response.ok) {
+                    const fileInfo = await response.json();
+                    const content = JSON.parse(atob(fileInfo.content));
+                    
+                    // Обновляем данные только если версия из GitHub новее
+                    const localUpdated = localStorage.getItem('rmk-last-updated');
+                    if (!localUpdated || new Date(content.lastUpdated) > new Date(localUpdated)) {
+                        products = content.products || [];
+                        receipts = content.receipts || [];
+                        cashRegister = content.cashRegister || {
+                            startAmount: 0,
+                            salesTotal: 0,
+                            withdrawals: 0,
+                            isShiftActive: false,
+                            endAmount: null
+                        };
+                        reports = content.reports || [];
+                        withdrawalsHistory = content.withdrawals || [];
+                        console.log("✅ Данные загружены из GitHub");
+                        
+                        // Сохраняем локально как кэш
+                        localStorage.setItem('rmk-data', JSON.stringify(content));
+                        localStorage.setItem('rmk-last-updated', content.lastUpdated);
+                    }
+                }
+            } catch (error) {
+                console.log("⚠ Ошибка загрузки из GitHub:", error);
+            }
+            
+            renderAll();
+        }
+
+        function manageGitHubToken() {
+            if (GITHUB_TOKEN) {
+                if (confirm("Токен уже сохранен. Сбросить текущий токен?")) {
+                    localStorage.removeItem('github-token');
+                    GITHUB_TOKEN = null;
+                    alert("Токен сброшен. При следующем сохранении будет запрошен новый.");
+                    tokenManagerBtn.textContent = "GitHub Token";
+                }
+            } else {
+                GITHUB_TOKEN = prompt("Введите GitHub Personal Access Token с правами repo:");
+                if (GITHUB_TOKEN) {
+                    localStorage.setItem('github-token', GITHUB_TOKEN);
+                    alert("Токен сохранен! Теперь данные будут синхронизироваться с GitHub.");
+                    tokenManagerBtn.textContent = "Токен сохранен";
+                    saveData();
+                }
+            }
+        }
 
         // ========== ОСНОВНЫЕ ФУНКЦИИ ==========
         function renderAll() {
@@ -786,11 +918,6 @@
             renderHistory();
             renderReports();
             updateCashDisplay();
-        }
-
-        function showSaveStatus() {
-            saveStatus.classList.add('visible');
-            setTimeout(() => saveStatus.classList.remove('visible'), 2000);
         }
 
         function switchTab(e) {
@@ -863,7 +990,7 @@
             }
             
             products.push({ name, barcode, price });
-            saveDataToConsole();
+            scheduleSave();
             
             productNameInput.value = '';
             productBarcodeInput.value = '';
@@ -980,7 +1107,7 @@
             
             receipts.push(receipt);
             cashRegister.salesTotal += total;
-            saveDataToConsole();
+            scheduleSave();
             
             currentCart = [];
             renderCart();
@@ -1007,7 +1134,7 @@
                 endAmount: null
             };
             
-            saveDataToConsole();
+            scheduleSave();
             updateCashDisplay();
             cashAmountInput.value = '';
             
@@ -1038,7 +1165,7 @@
             };
             
             reports.push(report);
-            saveDataToConsole();
+            scheduleSave();
             
             cashRegister = {
                 startAmount: 0,
@@ -1083,7 +1210,7 @@
                 comment: 'Выемка средств'
             });
             
-            saveDataToConsole();
+            scheduleSave();
             updateCashDisplay();
             withdrawAmountInput.value = '';
         }
@@ -1226,7 +1353,7 @@
         window.deleteProduct = function(index) {
             if (confirm('Удалить товар?')) {
                 products.splice(index, 1);
-                saveDataToConsole();
+                scheduleSave();
                 renderProducts();
             }
         };
@@ -1278,6 +1405,10 @@
             historyDateInput.valueAsDate = new Date();
             barcodeInput.focus();
             
+            if (GITHUB_TOKEN) {
+                tokenManagerBtn.textContent = "Токен сохранен";
+            }
+            
             tabs.forEach(tab => tab.addEventListener('click', switchTab));
             addProductBtn.addEventListener('click', addNewProduct);
             startShiftBtn.addEventListener('click', startShift);
@@ -1287,6 +1418,8 @@
             barcodeInput.addEventListener('input', searchProducts);
             catalogSearchInput.addEventListener('input', searchInCatalog);
             showHistoryBtn.addEventListener('click', renderHistory);
+            tokenManagerBtn.addEventListener('click', manageGitHubToken);
+            cashInput.addEventListener('input', calculateChange);
         });
     </script>
 </body>
