@@ -695,738 +695,751 @@
     <div id="saveStatus" class="save-status">Сохранено</div>
 
     <script>
-        // Конфигурация
-        const GITHUB_USER = "musclebar-work";
-        const REPO_NAME = "rmk";
-        const DATA_FILE = "data.json";
+        // Конфигурация приложения
+const APP_CONFIG = {
+  GITHUB_USER: "musclebar-work",
+  REPO_NAME: "rmk",
+  DATA_FILE: "data.json",
+  GITHUB_TOKEN: "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", // Внимание! Токен должен быть защищён
+  LOCAL_STORAGE_KEY: "rmk-pos-data",
+  DEFAULT_CASH_REGISTER: {
+    startAmount: 0,
+    salesTotal: 0,
+    withdrawals: 0,
+    isShiftActive: false,
+    endAmount: null
+  }
+};
 
-        // Данные приложения
-        let products = [];
-        let receipts = [];
-        let currentCart = [];
-        let cashRegister = {
-            startAmount: 0,
-            salesTotal: 0,
-            withdrawals: 0,
-            isShiftActive: false,
-            endAmount: null
+// Состояние приложения
+const AppState = {
+  products: [],
+  receipts: [],
+  currentCart: [],
+  cashRegister: {...APP_CONFIG.DEFAULT_CASH_REGISTER},
+  reports: [],
+  withdrawalsHistory: [],
+  
+  // Инициализация состояния
+  init() {
+    this.loadData();
+    this.setupEventListeners();
+    this.renderAll();
+    
+    // Установка текущей даты в поле истории
+    document.getElementById('history-date').valueAsDate = new Date();
+    
+    // Фокус на поле ввода штрих-кода
+    document.getElementById('barcode-input').focus();
+  },
+  
+  // ========== СИСТЕМА ХРАНЕНИЯ ДАННЫХ ==========
+  prepareData() {
+    return {
+      products: this.products,
+      receipts: this.receipts,
+      cashRegister: this.cashRegister,
+      reports: this.reports,
+      withdrawals: this.withdrawalsHistory,
+      lastUpdated: new Date().toISOString()
+    };
+  },
+  
+  showSaveStatus() {
+    const saveStatus = document.getElementById('saveStatus');
+    saveStatus.classList.add('visible');
+    setTimeout(() => saveStatus.classList.remove('visible'), 2000);
+  },
+  
+  async saveData() {
+    const data = this.prepareData();
+    
+    // 1. Всегда сохраняем в localStorage
+    localStorage.setItem(APP_CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
+    this.showSaveStatus();
+    
+    // 2. Попытка сохранить в GitHub (если токен есть)
+    if (APP_CONFIG.GITHUB_TOKEN) {
+      try {
+        // Получаем текущий SHA файла
+        let sha = null;
+        const getResponse = await fetch(
+          `https://api.github.com/repos/${APP_CONFIG.GITHUB_USER}/${APP_CONFIG.REPO_NAME}/contents/${APP_CONFIG.DATA_FILE}`,
+          {
+            headers: {
+              'Authorization': `token ${APP_CONFIG.GITHUB_TOKEN}`,
+              'Accept': 'application/vnd.github.v3+json'
+            }
+          }
+        );
+        
+        if (getResponse.ok) {
+          const fileInfo = await getResponse.json();
+          sha = fileInfo.sha;
+        } else if (getResponse.status !== 404) {
+          throw new Error('Ошибка при получении файла: ' + await getResponse.text());
+        }
+        
+        // Отправляем обновление
+        const content = btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2))));
+        const updateResponse = await fetch(
+          `https://api.github.com/repos/${APP_CONFIG.GITHUB_USER}/${APP_CONFIG.REPO_NAME}/contents/${APP_CONFIG.DATA_FILE}`,
+          {
+            method: 'PUT',
+            headers: {
+              'Authorization': `token ${APP_CONFIG.GITHUB_TOKEN}`,
+              'Accept': 'application/vnd.github.v3+json',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              message: 'Auto-update from RMK POS',
+              content: content,
+              sha: sha
+            })
+          }
+        );
+        
+        if (!updateResponse.ok) {
+          throw new Error('Ошибка при сохранении: ' + await updateResponse.text());
+        }
+        
+        console.log('✅ Данные сохранены в GitHub');
+      } catch (error) {
+        console.error('GitHub Error:', error);
+        alert('Ошибка сохранения в GitHub: ' + error.message);
+      }
+    }
+  },
+  
+  async loadData() {
+    // 1. Пробуем загрузить из localStorage
+    const localData = localStorage.getItem(APP_CONFIG.LOCAL_STORAGE_KEY);
+    if (localData) {
+      try {
+        const data = JSON.parse(localData);
+        this.products = data.products || [];
+        this.receipts = data.receipts || [];
+        this.cashRegister = data.cashRegister || {...APP_CONFIG.DEFAULT_CASH_REGISTER};
+        this.reports = data.reports || [];
+        this.withdrawalsHistory = data.withdrawals || [];
+        console.log("✅ Данные загружены из localStorage");
+      } catch (e) {
+        console.log("⚠ Ошибка загрузки из localStorage:", e);
+      }
+    }
+    
+    // 2. Пробуем загрузить из GitHub (если токен есть)
+    if (APP_CONFIG.GITHUB_TOKEN) {
+      try {
+        const response = await fetch(
+          `https://api.github.com/repos/${APP_CONFIG.GITHUB_USER}/${APP_CONFIG.REPO_NAME}/contents/${APP_CONFIG.DATA_FILE}`,
+          {
+            headers: {
+              'Authorization': `token ${APP_CONFIG.GITHUB_TOKEN}`,
+              'Accept': 'application/vnd.github.v3+json'
+            }
+          }
+        );
+        
+        if (response.ok) {
+          const fileInfo = await response.json();
+          const content = JSON.parse(atob(fileInfo.content));
+          
+          this.products = content.products || [];
+          this.receipts = content.receipts || [];
+          this.cashRegister = content.cashRegister || {...APP_CONFIG.DEFAULT_CASH_REGISTER};
+          this.reports = content.reports || [];
+          this.withdrawalsHistory = content.withdrawals || [];
+          console.log("✅ Данные загружены из GitHub");
+          
+          // Сохраняем локально как кэш
+          localStorage.setItem(APP_CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(content));
+        }
+      } catch (error) {
+        console.log("⚠ Ошибка загрузки из GitHub:", error);
+      }
+    }
+    
+    this.renderAll();
+  },
+  
+  exportData() {
+    const data = this.prepareData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `rmk-backup-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    alert('Данные успешно экспортированы в файл!');
+  },
+  
+  importData() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = e => {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+      
+      reader.onload = event => {
+        try {
+          const data = JSON.parse(event.target.result);
+          
+          this.products = data.products || [];
+          this.receipts = data.receipts || [];
+          this.cashRegister = data.cashRegister || {...APP_CONFIG.DEFAULT_CASH_REGISTER};
+          this.reports = data.reports || [];
+          this.withdrawalsHistory = data.withdrawals || [];
+          
+          localStorage.setItem(APP_CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
+          this.renderAll();
+          alert('Данные успешно импортированы из файла!');
+        } catch (error) {
+          alert('Ошибка при чтении файла: ' + error.message);
+        }
+      };
+      
+      reader.readAsText(file);
+    };
+    
+    input.click();
+  },
+  
+  // ========== ОСНОВНЫЕ ФУНКЦИИ ==========
+  renderAll() {
+    this.renderProducts();
+    this.renderHistory();
+    this.renderReports();
+    this.updateCashDisplay();
+  },
+  
+  switchTab(event) {
+    const tabId = event.target.dataset.tab;
+    
+    // Обновляем активные вкладки
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    
+    event.target.classList.add('active');
+    document.getElementById(tabId).classList.add('active');
+    
+    // Фокус на поле ввода штрих-кода при переключении на вкладку продаж
+    if (tabId === 'sale') {
+      document.getElementById('barcode-input').focus();
+    }
+  },
+  
+  // ========== ФУНКЦИОНАЛ ПРОДАЖ ==========
+  searchProducts() {
+    const searchTerm = document.getElementById('barcode-input').value.trim().toLowerCase();
+    const searchResultsEl = document.getElementById('search-results');
+    
+    if (searchTerm.length < 1) {
+      searchResultsEl.style.display = 'none';
+      return;
+    }
+
+    const results = this.products.filter(product => 
+      product.name.toLowerCase().includes(searchTerm) || 
+      product.barcode.includes(searchTerm)
+    );
+
+    this.displaySearchResults(results);
+  },
+  
+  displaySearchResults(results) {
+    const searchResultsEl = document.getElementById('search-results');
+    searchResultsEl.innerHTML = '';
+    
+    if (results.length === 0) {
+      searchResultsEl.style.display = 'none';
+      return;
+    }
+
+    results.forEach(product => {
+      const div = document.createElement('div');
+      div.className = 'search-item';
+      div.innerHTML = `${product.name} (${product.price} ₽) <span class="badge">${product.barcode}</span>`;
+      div.addEventListener('click', () => {
+        this.addProductToCart(product.barcode);
+        searchResultsEl.style.display = 'none';
+      });
+      searchResultsEl.appendChild(div);
+    });
+
+    searchResultsEl.style.display = 'block';
+  },
+  
+  addProductToCart(barcode = null) {
+    const searchTerm = barcode || document.getElementById('barcode-input').value.trim();
+    if (!searchTerm) return;
+    
+    const product = this.products.find(p => 
+      p.barcode === searchTerm || 
+      p.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+    
+    if (product) {
+      this.currentCart.push({
+        name: product.name,
+        price: product.price,
+        barcode: product.barcode
+      });
+      this.renderCart();
+      document.getElementById('barcode-input').value = '';
+      document.getElementById('search-results').style.display = 'none';
+    } else {
+      alert('Товар не найден! Проверьте штрих-код или название.');
+    }
+  },
+  
+  removeFromCart(index) {
+    this.currentCart.splice(index, 1);
+    this.renderCart();
+  },
+  
+  renderCart() {
+    const cartItemsEl = document.getElementById('cart-items');
+    cartItemsEl.innerHTML = '';
+    let total = 0;
+    
+    if (this.currentCart.length === 0) {
+      cartItemsEl.innerHTML = '<div style="padding: 20px; text-align: center;">Корзина пуста</div>';
+      document.getElementById('total').textContent = '0';
+      return;
+    }
+    
+    this.currentCart.forEach((item, index) => {
+      const div = document.createElement('div');
+      div.className = 'cart-item fade-in-up';
+      div.innerHTML = `
+        <span>${item.name} (${item.price} ₽)</span>
+        <button onclick="AppState.removeFromCart(${index})" class="danger">×</button>
+      `;
+      cartItemsEl.appendChild(div);
+      total += item.price;
+    });
+    
+    document.getElementById('total').textContent = total;
+  },
+  
+  calculateChange() {
+    const total = parseInt(document.getElementById('total').textContent) || 0;
+    const cash = parseInt(document.getElementById('cash').value) || 0;
+    const changeResultEl = document.getElementById('change-result');
+    const floatingChangeEl = document.getElementById('floating-change');
+    
+    if (cash === 0) {
+      changeResultEl.textContent = '';
+      floatingChangeEl.style.display = 'none';
+      return;
+    }
+    
+    if (cash < total) {
+      changeResultEl.textContent = 'Ошибка: недостаточно денег!';
+      changeResultEl.style.color = 'var(--danger)';
+      floatingChangeEl.style.display = 'none';
+    } else {
+      const change = cash - total;
+      changeResultEl.textContent = `Сдача: ${change} ₽`;
+      changeResultEl.style.color = 'var(--success)';
+      
+      floatingChangeEl.textContent = `Сдача: ${change} ₽`;
+      floatingChangeEl.style.display = 'flex';
+    }
+  },
+  
+  completeSale() {
+    if (!this.cashRegister.isShiftActive) {
+      alert('Смена не начата! Откройте смену в блоке управления.');
+      return;
+    }
+    
+    const total = parseInt(document.getElementById('total').textContent) || 0;
+    if (total === 0) {
+      alert('Чек пуст!');
+      return;
+    }
+    
+    const cash = parseInt(document.getElementById('cash').value) || 0;
+    if (cash < total) {
+      alert('Недостаточно денег!');
+      return;
+    }
+    
+    const now = new Date();
+    const receipt = {
+      date: now.toISOString().split('T')[0],
+      time: now.toLocaleTimeString(),
+      items: [...this.currentCart],
+      total: total,
+      cashReceived: cash,
+      change: cash - total
+    };
+    
+    this.receipts.push(receipt);
+    this.cashRegister.salesTotal += total;
+    this.saveData();
+    
+    this.currentCart = [];
+    this.renderCart();
+    document.getElementById('cash').value = '';
+    document.getElementById('change-result').textContent = '';
+    document.getElementById('floating-change').style.display = 'none';
+    
+    this.renderHistory();
+  },
+  
+  // ========== УПРАВЛЕНИЕ СМЕНОЙ ==========
+  startShift() {
+    const amount = parseInt(document.getElementById('cash-amount').value) || 0;
+    if (amount <= 0) {
+      alert('Введите корректную сумму!');
+      return;
+    }
+    
+    this.cashRegister = {
+      startAmount: amount,
+      salesTotal: 0,
+      withdrawals: 0,
+      isShiftActive: true,
+      endAmount: null
+    };
+    
+    this.saveData();
+    this.updateCashDisplay();
+    document.getElementById('cash-amount').value = '';
+  },
+  
+  endShift() {
+    if (!this.cashRegister.isShiftActive) {
+      alert('Смена уже закрыта!');
+      return;
+    }
+    
+    const endAmount = this.cashRegister.startAmount + this.cashRegister.salesTotal - this.cashRegister.withdrawals;
+    this.cashRegister.isShiftActive = false;
+    this.cashRegister.endAmount = endAmount;
+    
+    const now = new Date();
+    const report = {
+      date: now.toISOString().split('T')[0],
+      time: now.toLocaleTimeString(),
+      startAmount: this.cashRegister.startAmount,
+      salesTotal: this.cashRegister.salesTotal,
+      withdrawals: this.cashRegister.withdrawals,
+      endAmount: endAmount,
+      receipts: this.receipts.filter(r => r.date === now.toISOString().split('T')[0]),
+      withdrawalsHistory: this.withdrawalsHistory.filter(w => w.date === now.toISOString().split('T')[0])
+    };
+    
+    this.reports.push(report);
+    this.saveData();
+    
+    this.cashRegister = {...APP_CONFIG.DEFAULT_CASH_REGISTER};
+    this.updateCashDisplay();
+    this.renderReports();
+  },
+  
+  withdrawCash() {
+    if (!this.cashRegister.isShiftActive) {
+      alert('Смена не начата!');
+      return;
+    }
+    
+    const amount = parseInt(document.getElementById('withdraw-amount').value) || 0;
+    if (amount <= 0) {
+      alert('Введите корректную сумму!');
+      return;
+    }
+    
+    const totalCash = this.cashRegister.startAmount + this.cashRegister.salesTotal - this.cashRegister.withdrawals;
+    if (amount > totalCash) {
+      alert('Недостаточно средств в кассе!');
+      return;
+    }
+    
+    this.cashRegister.withdrawals += amount;
+    
+    const now = new Date();
+    this.withdrawalsHistory.push({
+      date: now.toISOString().split('T')[0],
+      time: now.toLocaleTimeString(),
+      amount: amount,
+      comment: 'Выемка средств'
+    });
+    
+    this.saveData();
+    this.updateCashDisplay();
+    document.getElementById('withdraw-amount').value = '';
+  },
+  
+  updateCashDisplay() {
+    const totalCash = this.cashRegister.startAmount + this.cashRegister.salesTotal - this.cashRegister.withdrawals;
+    const currentShiftStatusEl = document.getElementById('current-shift-status');
+    
+    if (this.cashRegister.isShiftActive) {
+      currentShiftStatusEl.textContent = 'Смена активна';
+      currentShiftStatusEl.className = 'shift-status active';
+    } else {
+      currentShiftStatusEl.textContent = 'Смена не начата';
+      currentShiftStatusEl.className = 'shift-status inactive';
+    }
+    
+    document.getElementById('display-start-cash').textContent = this.cashRegister.startAmount;
+    document.getElementById('display-sales-total').textContent = this.cashRegister.salesTotal;
+    document.getElementById('display-withdrawals').textContent = this.cashRegister.withdrawals;
+    document.getElementById('display-total-cash').textContent = totalCash;
+  },
+  
+  // ========== КАТАЛОГ ТОВАРОВ ==========
+  searchInCatalog() {
+    const searchTerm = document.getElementById('catalog-search-input').value.trim().toLowerCase();
+    if (!searchTerm) {
+      this.renderProducts();
+      return;
+    }
+
+    const filteredProducts = this.products.filter(product => 
+      product.name.toLowerCase().includes(searchTerm) || 
+      product.barcode.toLowerCase().includes(searchTerm)
+    );
+
+    this.renderProducts(filteredProducts);
+  },
+  
+  addNewProduct() {
+    const name = document.getElementById('product-name').value.trim();
+    const barcode = document.getElementById('product-barcode').value.trim();
+    const price = parseInt(document.getElementById('product-price').value) || 0;
+    
+    if (!name || !barcode || price <= 0) {
+      alert('Заполните все поля корректно!');
+      return;
+    }
+    
+    if (this.products.some(p => p.barcode === barcode)) {
+      alert('Товар с таким штрих-кодом уже существует!');
+      return;
+    }
+    
+    this.products.push({ name, barcode, price });
+    this.saveData();
+    
+    document.getElementById('product-name').value = '';
+    document.getElementById('product-barcode').value = '';
+    document.getElementById('product-price').value = '';
+    this.renderProducts();
+  },
+  
+  renderProducts(productsToRender = this.products) {
+    const productsListEl = document.getElementById('products-list');
+    productsListEl.innerHTML = '';
+    
+    if (productsToRender.length === 0) {
+      productsListEl.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 20px;">Товары не найдены</td></tr>';
+      return;
+    }
+    
+    productsToRender.forEach((product, index) => {
+      const tr = document.createElement('tr');
+      tr.className = 'fade-in-up';
+      tr.innerHTML = `
+        <td>${product.name}</td>
+        <td><span class="badge">${product.barcode}</span></td>
+        <td>${product.price} ₽</td>
+        <td>
+          <button onclick="AppState.deleteProduct(${index})" class="danger">Удалить</button>
+        </td>
+      `;
+      productsListEl.appendChild(tr);
+    });
+  },
+  
+  deleteProduct(index) {
+    if (confirm('Удалить товар?')) {
+      this.products.splice(index, 1);
+      this.saveData();
+      this.renderProducts();
+    }
+  },
+  
+  // ========== ИСТОРИЯ ПРОДАЖ ==========
+  renderHistory() {
+    const date = document.getElementById('history-date').value;
+    const groupedByDate = {};
+    
+    this.receipts.forEach(receipt => {
+      if (!groupedByDate[receipt.date]) {
+        groupedByDate[receipt.date] = {
+          count: 0,
+          total: 0,
+          receipts: []
         };
-        let reports = [];
-        let withdrawalsHistory = [];
+      }
+      groupedByDate[receipt.date].count++;
+      groupedByDate[receipt.date].total += receipt.total;
+      groupedByDate[receipt.date].receipts.push(receipt);
+    });
+    
+    const withdrawalsByDate = {};
+    this.withdrawalsHistory.forEach(withdrawal => {
+      if (!withdrawalsByDate[withdrawal.date]) {
+        withdrawalsByDate[withdrawal.date] = 0;
+      }
+      withdrawalsByDate[withdrawal.date] += withdrawal.amount;
+    });
+    
+    const historyListEl = document.getElementById('history-list');
+    historyListEl.innerHTML = '';
+    
+    if (Object.keys(groupedByDate).length === 0) {
+      historyListEl.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px;">Нет данных о продажах</td></tr>';
+      return;
+    }
+    
+    Object.entries(groupedByDate).forEach(([date, data]) => {
+      const tr = document.createElement('tr');
+      tr.className = 'fade-in-up';
+      tr.innerHTML = `
+        <td>${date}</td>
+        <td>${data.count}</td>
+        <td>${data.total} ₽</td>
+        <td>${withdrawalsByDate[date] || 0} ₽</td>
+        <td><button onclick="AppState.showReceiptsDetails('${date}')">Подробности</button></td>
+      `;
+      historyListEl.appendChild(tr);
+    });
+  },
+  
+  showReceiptsDetails(date) {
+    const dailyReceipts = this.receipts.filter(r => r.date === date);
+    const dailyWithdrawals = this.withdrawalsHistory.filter(w => w.date === date);
+    
+    let details = `Детали за ${date}:\n\n`;
+    details += `=== Продажи ===\n`;
+    details += `Всего чеков: ${dailyReceipts.length}\n`;
+    details += `Общая сумма: ${dailyReceipts.reduce((sum, r) => sum + r.total, 0)} ₽\n\n`;
+    
+    dailyReceipts.forEach((r, i) => {
+      details += `Чек #${i + 1} (${r.time}): ${r.total} ₽\n`;
+      r.items.forEach(item => {
+        details += `- ${item.name}: ${item.price} ₽\n`;
+      });
+      details += '\n';
+    });
+    
+    if (dailyWithdrawals.length > 0) {
+      details += `=== Выемки ===\n`;
+      details += `Всего выемок: ${dailyWithdrawals.length}\n`;
+      details += `Общая сумма: ${dailyWithdrawals.reduce((sum, w) => sum + w.amount, 0)} ₽\n\n`;
+      
+      dailyWithdrawals.forEach((w, i) => {
+        details += `Выемка #${i + 1} (${w.time}): ${w.amount} ₽\n`;
+      });
+    }
+    
+    alert(details);
+  },
+  
+  // ========== ОТЧЕТЫ ==========
+  renderReports() {
+    const reportsListEl = document.getElementById('reports-list');
+    reportsListEl.innerHTML = '';
+    
+    if (this.reports.length === 0) {
+      reportsListEl.innerHTML = '<div style="padding: 15px; text-align: center;">Нет сохраненных отчетов</div>';
+      return;
+    }
+    
+    this.reports.forEach((report, index) => {
+      const div = document.createElement('div');
+      div.className = 'report-item fade-in-up';
+      div.innerHTML = `
+        <div><strong>Отчет за ${report.date}</strong></div>
+        <div style="display: flex; justify-content: space-between; margin-top: 10px;">
+          <div>
+            <div>Начальная сумма: <strong>${report.startAmount} ₽</strong></div>
+            <div>Продажи: <strong>${report.salesTotal} ₽</strong></div>
+          </div>
+          <div>
+            <div>Выемки: <strong>${report.withdrawals || 0} ₽</strong></div>
+            <div>Итоговая сумма: <strong>${report.endAmount} ₽</strong></div>
+          </div>
+        </div>
+        <button onclick="AppState.viewReportDetails(${index})" style="margin-top: 10px; width: 100%;">Просмотреть</button>
+      `;
+      reportsListEl.appendChild(div);
+    });
+  },
+  
+  viewReportDetails(index) {
+    const report = this.reports[index];
+    let details = `Отчет за ${report.date}\n\n`;
+    details += `Начальная сумма: ${report.startAmount} ₽\n`;
+    details += `Продажи за смену: ${report.salesTotal} ₽\n`;
+    details += `Выемки за смену: ${report.withdrawals || 0} ₽\n`;
+    details += `Итоговая сумма: ${report.endAmount} ₽\n\n`;
+    details += `Чеков за смену: ${report.receipts.length}\n`;
+    details += `Выемок за смену: ${report.withdrawalsHistory?.length || 0}\n`;
+    
+    alert(details);
+  },
+  
+  // ========== НАСТРОЙКА ОБРАБОТЧИКОВ СОБЫТИЙ ==========
+  setupEventListeners() {
+    // Переключение вкладок
+    document.querySelectorAll('.tab').forEach(tab => 
+      tab.addEventListener('click', (e) => this.switchTab(e))
+    );
+    
+    // Каталог товаров
+    document.getElementById('add-product').addEventListener('click', () => this.addNewProduct());
+    document.getElementById('catalog-search-input').addEventListener('input', () => this.searchInCatalog());
+    
+    // Управление сменой
+    document.getElementById('start-shift').addEventListener('click', () => this.startShift());
+    document.getElementById('end-shift').addEventListener('click', () => this.endShift());
+    document.getElementById('withdraw-cash').addEventListener('click', () => this.withdrawCash());
+    
+    // Продажи
+    document.getElementById('complete-sale').addEventListener('click', () => this.completeSale());
+    document.getElementById('barcode-input').addEventListener('input', () => this.searchProducts());
+    document.getElementById('cash').addEventListener('input', () => this.calculateChange());
+    
+    // История
+    document.getElementById('show-history').addEventListener('click', () => this.renderHistory());
+    
+    // Управление данными
+    document.querySelector('button[onclick="saveData()"]').addEventListener('click', () => this.saveData());
+    document.querySelector('button[onclick="loadData()"]').addEventListener('click', () => this.loadData());
+    document.querySelector('button[onclick="exportData()"]').addEventListener('click', () => this.exportData());
+    document.querySelector('button[onclick="importData()"]').addEventListener('click', () => this.importData());
+  }
+};
 
-        // DOM элементы
-        const tabContents = document.querySelectorAll('.tab-content');
-        const tabs = document.querySelectorAll('.tab');
-        const barcodeInput = document.getElementById('barcode-input');
-        const searchResultsEl = document.getElementById('search-results');
-        const cartItemsEl = document.getElementById('cart-items');
-        const totalEl = document.getElementById('total');
-        const cashInput = document.getElementById('cash');
-        const completeSaleBtn = document.getElementById('complete-sale');
-        const changeResultEl = document.getElementById('change-result');
-        const floatingChangeEl = document.getElementById('floating-change');
-        const productNameInput = document.getElementById('product-name');
-        const productBarcodeInput = document.getElementById('product-barcode');
-        const productPriceInput = document.getElementById('product-price');
-        const addProductBtn = document.getElementById('add-product');
-        const productsListEl = document.getElementById('products-list');
-        const historyDateInput = document.getElementById('history-date');
-        const showHistoryBtn = document.getElementById('show-history');
-        const historyListEl = document.getElementById('history-list');
-        const cashAmountInput = document.getElementById('cash-amount');
-        const startShiftBtn = document.getElementById('start-shift');
-        const endShiftBtn = document.getElementById('end-shift');
-        const withdrawAmountInput = document.getElementById('withdraw-amount');
-        const withdrawCashBtn = document.getElementById('withdraw-cash');
-        const currentShiftStatusEl = document.getElementById('current-shift-status');
-        const displayStartCashEl = document.getElementById('display-start-cash');
-        const displaySalesTotalEl = document.getElementById('display-sales-total');
-        const displayWithdrawalsEl = document.getElementById('display-withdrawals');
-        const displayTotalCashEl = document.getElementById('display-total-cash');
-        const catalogSearchInput = document.getElementById('catalog-search-input');
-        const reportsListEl = document.getElementById('reports-list');
-        const saveStatus = document.getElementById('saveStatus');
+// Инициализация приложения при загрузке страницы
+document.addEventListener('DOMContentLoaded', () => {
+  AppState.init();
+});
 
-        // ========== СИСТЕМА СОХРАНЕНИЯ ==========
-        function prepareData() {
-            return {
-                products,
-                receipts,
-                cashRegister,
-                reports,
-                withdrawals: withdrawalsHistory,
-                lastUpdated: new Date().toISOString()
-            };
-        }
-
-        function showSaveStatus() {
-            saveStatus.classList.add('visible');
-            setTimeout(() => saveStatus.classList.remove('visible'), 2000);
-        }
-
-        async function saveData() {
-            const data = prepareData();
-            
-            // Всегда сохраняем в localStorage
-            localStorage.setItem('rmk-data', JSON.stringify(data));
-            showSaveStatus();
-            
-            try {
-                // Попробуем сохранить в GitHub (только если есть токен)
-                const token = prompt("Введите GitHub Personal Access Token (если нужно сохранить в облако):");
-                if (!token) return;
-                
-                // 1. Получаем текущий SHA файла
-                const getResponse = await fetch(`https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${DATA_FILE}`, {
-                    headers: {
-                        'Authorization': `token ${token}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                });
-                
-                let sha = null;
-                if (getResponse.ok) {
-                    const fileInfo = await getResponse.json();
-                    sha = fileInfo.sha;
-                } else if (getResponse.status !== 404) {
-                    throw new Error('Ошибка при получении файла: ' + await getResponse.text());
-                }
-                
-                // 2. Отправляем обновление
-                const content = btoa(unescape(encodeURIComponent(JSON.stringify(data, null, 2))));
-                const updateResponse = await fetch(`https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${DATA_FILE}`, {
-                    method: 'PUT',
-                    headers: {
-                        'Authorization': `token ${token}`,
-                        'Accept': 'application/vnd.github.v3+json',
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        message: 'Auto-update from RMK POS',
-                        content: content,
-                        sha: sha
-                    })
-                });
-                
-                if (!updateResponse.ok) {
-                    throw new Error('Ошибка при сохранении: ' + await updateResponse.text());
-                }
-                
-                console.log('✅ Данные сохранены в GitHub');
-                alert('Данные успешно сохранены в GitHub!');
-            } catch (error) {
-                console.error('GitHub Error:', error);
-                alert('Ошибка сохранения в GitHub: ' + error.message);
-            }
-        }
-
-        async function loadData() {
-            // Сначала пробуем загрузить из localStorage
-            const localData = localStorage.getItem('rmk-data');
-            if (localData) {
-                try {
-                    const data = JSON.parse(localData);
-                    products = data.products || [];
-                    receipts = data.receipts || [];
-                    cashRegister = data.cashRegister || {
-                        startAmount: 0,
-                        salesTotal: 0,
-                        withdrawals: 0,
-                        isShiftActive: false,
-                        endAmount: null
-                    };
-                    reports = data.reports || [];
-                    withdrawalsHistory = data.withdrawals || [];
-                    console.log("✅ Данные загружены из localStorage");
-                    renderAll();
-                } catch (e) {
-                    console.log("⚠ Ошибка загрузки из localStorage:", e);
-                }
-            }
-            
-            // Затем пробуем GitHub по запросу пользователя
-            try {
-                const loadFromCloud = confirm("Загрузить данные из GitHub?");
-                if (!loadFromCloud) return;
-                
-                const token = prompt("Введите GitHub Personal Access Token:");
-                if (!token) return;
-                
-                const response = await fetch(`https://api.github.com/repos/${GITHUB_USER}/${REPO_NAME}/contents/${DATA_FILE}`, {
-                    headers: {
-                        'Authorization': `token ${token}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                });
-                
-                if (response.ok) {
-                    const fileInfo = await response.json();
-                    const content = JSON.parse(atob(fileInfo.content));
-                    
-                    products = content.products || [];
-                    receipts = content.receipts || [];
-                    cashRegister = content.cashRegister || {
-                        startAmount: 0,
-                        salesTotal: 0,
-                        withdrawals: 0,
-                        isShiftActive: false,
-                        endAmount: null
-                    };
-                    reports = content.reports || [];
-                    withdrawalsHistory = content.withdrawals || [];
-                    console.log("✅ Данные загружены из GitHub");
-                    
-                    // Сохраняем локально как кэш
-                    localStorage.setItem('rmk-data', JSON.stringify(content));
-                    renderAll();
-                    alert('Данные успешно загружены из GitHub!');
-                } else {
-                    throw new Error('Ошибка загрузки: ' + await response.text());
-                }
-            } catch (error) {
-                console.log("⚠ Ошибка загрузки из GitHub:", error);
-                alert('Ошибка загрузки из GitHub: ' + error.message);
-            }
-        }
-
-        function exportData() {
-            const data = prepareData();
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `rmk-backup-${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            
-            alert('Данные успешно экспортированы в файл!');
-        }
-
-        function importData() {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.json';
-            
-            input.onchange = e => {
-                const file = e.target.files[0];
-                const reader = new FileReader();
-                
-                reader.onload = event => {
-                    try {
-                        const data = JSON.parse(event.target.result);
-                        
-                        products = data.products || [];
-                        receipts = data.receipts || [];
-                        cashRegister = data.cashRegister || {
-                            startAmount: 0,
-                            salesTotal: 0,
-                            withdrawals: 0,
-                            isShiftActive: false,
-                            endAmount: null
-                        };
-                        reports = data.reports || [];
-                        withdrawalsHistory = data.withdrawals || [];
-                        
-                        localStorage.setItem('rmk-data', JSON.stringify(data));
-                        renderAll();
-                        alert('Данные успешно импортированы из файла!');
-                    } catch (error) {
-                        alert('Ошибка при чтении файла: ' + error.message);
-                    }
-                };
-                
-                reader.readAsText(file);
-            };
-            
-            input.click();
-        }
-
-        // ========== ОСНОВНЫЕ ФУНКЦИИ ==========
-        function renderAll() {
-            renderProducts();
-            renderHistory();
-            renderReports();
-            updateCashDisplay();
-        }
-
-        function switchTab(e) {
-            tabs.forEach(t => t.classList.remove('active'));
-            tabContents.forEach(c => c.classList.remove('active'));
-            e.target.classList.add('active');
-            document.getElementById(e.target.dataset.tab).classList.add('active');
-            if (e.target.dataset.tab === 'sale') barcodeInput.focus();
-        }
-
-        function renderProducts(productsToRender = products) {
-            productsListEl.innerHTML = '';
-            
-            if (productsToRender.length === 0) {
-                productsListEl.innerHTML = '<tr><td colspan="4" style="text-align: center; padding: 20px;">Товары не найдены</td></tr>';
-                return;
-            }
-            
-            productsToRender.forEach((product, index) => {
-                const tr = document.createElement('tr');
-                tr.className = 'fade-in-up';
-                tr.innerHTML = `
-                    <td>${product.name}</td>
-                    <td><span class="badge">${product.barcode}</span></td>
-                    <td>${product.price} ₽</td>
-                    <td>
-                        <button onclick="deleteProduct(${index})" class="danger">Удалить</button>
-                    </td>
-                `;
-                productsListEl.appendChild(tr);
-            });
-        }
-
-        function searchInCatalog() {
-            const searchTerm = catalogSearchInput.value.trim().toLowerCase();
-            if (!searchTerm) {
-                renderProducts();
-                return;
-            }
-
-            const filteredProducts = products.filter(product => 
-                product.name.toLowerCase().includes(searchTerm) || 
-                product.barcode.toLowerCase().includes(searchTerm)
-            );
-
-            renderProducts(filteredProducts);
-        }
-
-        function addNewProduct() {
-            const name = productNameInput.value.trim();
-            const barcode = productBarcodeInput.value.trim();
-            const price = parseInt(productPriceInput.value) || 0;
-            
-            if (!name || !barcode || price <= 0) {
-                alert('Заполните все поля корректно!');
-                return;
-            }
-            
-            if (products.some(p => p.barcode === barcode)) {
-                alert('Товар с таким штрих-кодом уже существует!');
-                return;
-            }
-            
-            products.push({ name, barcode, price });
-            saveData();
-            
-            productNameInput.value = '';
-            productBarcodeInput.value = '';
-            productPriceInput.value = '';
-            renderProducts();
-        }
-
-        function renderCart() {
-            cartItemsEl.innerHTML = '';
-            let total = 0;
-            
-            if (currentCart.length === 0) {
-                cartItemsEl.innerHTML = '<div style="padding: 20px; text-align: center;">Корзина пуста</div>';
-                totalEl.textContent = '0';
-                return;
-            }
-            
-            currentCart.forEach((item, index) => {
-                const div = document.createElement('div');
-                div.className = 'cart-item fade-in-up';
-                div.innerHTML = `
-                    <span>${item.name} (${item.price} ₽)</span>
-                    <button onclick="removeFromCart(${index})" class="danger">×</button>
-                `;
-                cartItemsEl.appendChild(div);
-                total += item.price;
-            });
-            
-            totalEl.textContent = total;
-        }
-
-        function addProductToCart(barcode = null) {
-            const searchTerm = barcode || barcodeInput.value.trim();
-            if (!searchTerm) return;
-            
-            const product = products.find(p => 
-                p.barcode === searchTerm || 
-                p.name.toLowerCase().includes(searchTerm.toLowerCase())
-            );
-            
-            if (product) {
-                currentCart.push({
-                    name: product.name,
-                    price: product.price,
-                    barcode: product.barcode
-                });
-                renderCart();
-                barcodeInput.value = '';
-                searchResultsEl.style.display = 'none';
-            } else {
-                alert('Товар не найден! Проверьте штрих-код или название.');
-            }
-        }
-
-        function removeFromCart(index) {
-            currentCart.splice(index, 1);
-            renderCart();
-        }
-
-        function calculateChange() {
-            const total = parseInt(totalEl.textContent) || 0;
-            const cash = parseInt(cashInput.value) || 0;
-            
-            if (cash === 0) {
-                changeResultEl.textContent = '';
-                floatingChangeEl.style.display = 'none';
-                return;
-            }
-            
-            if (cash < total) {
-                changeResultEl.textContent = 'Ошибка: недостаточно денег!';
-                changeResultEl.style.color = 'var(--danger)';
-                floatingChangeEl.style.display = 'none';
-            } else {
-                const change = cash - total;
-                changeResultEl.textContent = `Сдача: ${change} ₽`;
-                changeResultEl.style.color = 'var(--success)';
-                
-                floatingChangeEl.textContent = `Сдача: ${change} ₽`;
-                floatingChangeEl.style.display = 'flex';
-            }
-        }
-
-        function completeSale() {
-            if (!cashRegister.isShiftActive) {
-                alert('Смена не начата! Откройте смену в блоке управления.');
-                return;
-            }
-            
-            const total = parseInt(totalEl.textContent) || 0;
-            if (total === 0) {
-                alert('Чек пуст!');
-                return;
-            }
-            
-            const cash = parseInt(cashInput.value) || 0;
-            if (cash < total) {
-                alert('Недостаточно денег!');
-                return;
-            }
-            
-            const now = new Date();
-            const receipt = {
-                date: now.toISOString().split('T')[0],
-                time: now.toLocaleTimeString(),
-                items: [...currentCart],
-                total: total,
-                cashReceived: cash,
-                change: cash - total
-            };
-            
-            receipts.push(receipt);
-            cashRegister.salesTotal += total;
-            saveData();
-            
-            currentCart = [];
-            renderCart();
-            cashInput.value = '';
-            changeResultEl.textContent = '';
-            floatingChangeEl.style.display = 'none';
-            
-            renderHistory();
-        }
-
-        function startShift() {
-            const amount = parseInt(cashAmountInput.value) || 0;
-            if (amount <= 0) {
-                alert('Введите корректную сумму!');
-                return;
-            }
-            
-            cashRegister = {
-                startAmount: amount,
-                salesTotal: 0,
-                withdrawals: 0,
-                isShiftActive: true,
-                endAmount: null
-            };
-            
-            saveData();
-            updateCashDisplay();
-            cashAmountInput.value = '';
-        }
-
-        function endShift() {
-            if (!cashRegister.isShiftActive) {
-                alert('Смена уже закрыта!');
-                return;
-            }
-            
-            const endAmount = cashRegister.startAmount + cashRegister.salesTotal - cashRegister.withdrawals;
-            cashRegister.isShiftActive = false;
-            cashRegister.endAmount = endAmount;
-            
-            const now = new Date();
-            const report = {
-                date: now.toISOString().split('T')[0],
-                time: now.toLocaleTimeString(),
-                startAmount: cashRegister.startAmount,
-                salesTotal: cashRegister.salesTotal,
-                withdrawals: cashRegister.withdrawals,
-                endAmount: endAmount,
-                receipts: receipts.filter(r => r.date === now.toISOString().split('T')[0]),
-                withdrawalsHistory: withdrawalsHistory.filter(w => w.date === now.toISOString().split('T')[0])
-            };
-            
-            reports.push(report);
-            saveData();
-            
-            cashRegister = {
-                startAmount: 0,
-                salesTotal: 0,
-                withdrawals: 0,
-                isShiftActive: false,
-                endAmount: null
-            };
-            
-            updateCashDisplay();
-            renderReports();
-        }
-
-        function withdrawCash() {
-            if (!cashRegister.isShiftActive) {
-                alert('Смена не начата!');
-                return;
-            }
-            
-            const amount = parseInt(withdrawAmountInput.value) || 0;
-            if (amount <= 0) {
-                alert('Введите корректную сумму!');
-                return;
-            }
-            
-            const totalCash = cashRegister.startAmount + cashRegister.salesTotal - cashRegister.withdrawals;
-            if (amount > totalCash) {
-                alert('Недостаточно средств в кассе!');
-                return;
-            }
-            
-            cashRegister.withdrawals += amount;
-            
-            const now = new Date();
-            withdrawalsHistory.push({
-                date: now.toISOString().split('T')[0],
-                time: now.toLocaleTimeString(),
-                amount: amount,
-                comment: 'Выемка средств'
-            });
-            
-            saveData();
-            updateCashDisplay();
-            withdrawAmountInput.value = '';
-        }
-
-        function updateCashDisplay() {
-            const totalCash = cashRegister.startAmount + cashRegister.salesTotal - cashRegister.withdrawals;
-            
-            if (cashRegister.isShiftActive) {
-                currentShiftStatusEl.textContent = 'Смена активна';
-                currentShiftStatusEl.className = 'shift-status active';
-            } else {
-                currentShiftStatusEl.textContent = 'Смена не начата';
-                currentShiftStatusEl.className = 'shift-status inactive';
-            }
-            
-            displayStartCashEl.textContent = cashRegister.startAmount;
-            displaySalesTotalEl.textContent = cashRegister.salesTotal;
-            displayWithdrawalsEl.textContent = cashRegister.withdrawals;
-            displayTotalCashEl.textContent = totalCash;
-        }
-
-        function renderHistory() {
-            const date = historyDateInput.value;
-            const groupedByDate = {};
-            
-            receipts.forEach(receipt => {
-                if (!groupedByDate[receipt.date]) {
-                    groupedByDate[receipt.date] = {
-                        count: 0,
-                        total: 0,
-                        receipts: []
-                    };
-                }
-                groupedByDate[receipt.date].count++;
-                groupedByDate[receipt.date].total += receipt.total;
-                groupedByDate[receipt.date].receipts.push(receipt);
-            });
-            
-            const withdrawalsByDate = {};
-            withdrawalsHistory.forEach(withdrawal => {
-                if (!withdrawalsByDate[withdrawal.date]) {
-                    withdrawalsByDate[withdrawal.date] = 0;
-                }
-                withdrawalsByDate[withdrawal.date] += withdrawal.amount;
-            });
-            
-            historyListEl.innerHTML = '';
-            
-            if (Object.keys(groupedByDate).length === 0) {
-                historyListEl.innerHTML = '<tr><td colspan="5" style="text-align: center; padding: 20px;">Нет данных о продажах</td></tr>';
-                return;
-            }
-            
-            Object.entries(groupedByDate).forEach(([date, data]) => {
-                const tr = document.createElement('tr');
-                tr.className = 'fade-in-up';
-                tr.innerHTML = `
-                    <td>${date}</td>
-                    <td>${data.count}</td>
-                    <td>${data.total} ₽</td>
-                    <td>${withdrawalsByDate[date] || 0} ₽</td>
-                    <td><button onclick="showReceiptsDetails('${date}')">Подробности</button></td>
-                `;
-                historyListEl.appendChild(tr);
-            });
-        }
-
-        function renderReports() {
-            reportsListEl.innerHTML = '';
-            
-            if (reports.length === 0) {
-                reportsListEl.innerHTML = '<div style="padding: 15px; text-align: center;">Нет сохраненных отчетов</div>';
-                return;
-            }
-            
-            reports.forEach((report, index) => {
-                const div = document.createElement('div');
-                div.className = 'report-item fade-in-up';
-                div.innerHTML = `
-                    <div><strong>Отчет за ${report.date}</strong></div>
-                    <div style="display: flex; justify-content: space-between; margin-top: 10px;">
-                        <div>
-                            <div>Начальная сумма: <strong>${report.startAmount} ₽</strong></div>
-                            <div>Продажи: <strong>${report.salesTotal} ₽</strong></div>
-                        </div>
-                        <div>
-                            <div>Выемки: <strong>${report.withdrawals || 0} ₽</strong></div>
-                            <div>Итоговая сумма: <strong>${report.endAmount} ₽</strong></div>
-                        </div>
-                    </div>
-                    <button onclick="viewReportDetails(${index})" style="margin-top: 10px; width: 100%;">Просмотреть</button>
-                `;
-                reportsListEl.appendChild(div);
-            });
-        }
-
-        function searchProducts() {
-            const searchTerm = barcodeInput.value.trim().toLowerCase();
-            if (searchTerm.length < 1) {
-                searchResultsEl.style.display = 'none';
-                return;
-            }
-
-            const results = products.filter(product => 
-                product.name.toLowerCase().includes(searchTerm) || 
-                product.barcode.includes(searchTerm)
-            );
-
-            displaySearchResults(results);
-        }
-
-        function displaySearchResults(results) {
-            searchResultsEl.innerHTML = '';
-            
-            if (results.length === 0) {
-                searchResultsEl.style.display = 'none';
-                return;
-            }
-
-            results.forEach(product => {
-                const div = document.createElement('div');
-                div.className = 'search-item';
-                div.innerHTML = `${product.name} (${product.price} ₽) <span class="badge">${product.barcode}</span>`;
-                div.addEventListener('click', () => {
-                    addProductToCart(product.barcode);
-                    searchResultsEl.style.display = 'none';
-                });
-                searchResultsEl.appendChild(div);
-            });
-
-            searchResultsEl.style.display = 'block';
-        }
-
-        // ========== ГЛОБАЛЬНЫЕ ФУНКЦИИ ==========
-        window.removeFromCart = removeFromCart;
-        window.deleteProduct = function(index) {
-            if (confirm('Удалить товар?')) {
-                products.splice(index, 1);
-                saveData();
-                renderProducts();
-            }
-        };
-        window.showReceiptsDetails = function(date) {
-            const dailyReceipts = receipts.filter(r => r.date === date);
-            const dailyWithdrawals = withdrawalsHistory.filter(w => w.date === date);
-            
-            let details = `Детали за ${date}:\n\n`;
-            details += `=== Продажи ===\n`;
-            details += `Всего чеков: ${dailyReceipts.length}\n`;
-            details += `Общая сумма: ${dailyReceipts.reduce((sum, r) => sum + r.total, 0)} ₽\n\n`;
-            
-            dailyReceipts.forEach((r, i) => {
-                details += `Чек #${i + 1} (${r.time}): ${r.total} ₽\n`;
-                r.items.forEach(item => {
-                    details += `- ${item.name}: ${item.price} ₽\n`;
-                });
-                details += '\n';
-            });
-            
-            if (dailyWithdrawals.length > 0) {
-                details += `=== Выемки ===\n`;
-                details += `Всего выемок: ${dailyWithdrawals.length}\n`;
-                details += `Общая сумма: ${dailyWithdrawals.reduce((sum, w) => sum + w.amount, 0)} ₽\n\n`;
-                
-                dailyWithdrawals.forEach((w, i) => {
-                    details += `Выемка #${i + 1} (${w.time}): ${w.amount} ₽\n`;
-                });
-            }
-            
-            alert(details);
-        };
-        window.viewReportDetails = function(index) {
-            const report = reports[index];
-            let details = `Отчет за ${report.date}\n\n`;
-            details += `Начальная сумма: ${report.startAmount} ₽\n`;
-            details += `Продажи за смену: ${report.salesTotal} ₽\n`;
-            details += `Выемки за смену: ${report.withdrawals || 0} ₽\n`;
-            details += `Итоговая сумма: ${report.endAmount} ₽\n\n`;
-            details += `Чеков за смену: ${report.receipts.length}\n`;
-            details += `Выемок за смену: ${report.withdrawalsHistory?.length || 0}\n`;
-            
-            alert(details);
-        };
-
-        // ========== ЗАПУСК ПРИЛОЖЕНИЯ ==========
-        document.addEventListener('DOMContentLoaded', () => {
-            loadData();
-            historyDateInput.valueAsDate = new Date();
-            barcodeInput.focus();
-            
-            // Назначение обработчиков событий
-            tabs.forEach(tab => tab.addEventListener('click', switchTab));
-            addProductBtn.addEventListener('click', addNewProduct);
-            startShiftBtn.addEventListener('click', startShift);
-            endShiftBtn.addEventListener('click', endShift);
-            withdrawCashBtn.addEventListener('click', withdrawCash);
-            completeSaleBtn.addEventListener('click', completeSale);
-            barcodeInput.addEventListener('input', searchProducts);
-            catalogSearchInput.addEventListener('input', searchInCatalog);
-            showHistoryBtn.addEventListener('click', renderHistory);
-            cashInput.addEventListener('input', calculateChange);
-        });
+// Глобальные функции для вызова из HTML
+window.saveData = () => AppState.saveData();
+window.loadData = () => AppState.loadData();
+window.exportData = () => AppState.exportData();
+window.importData = () => AppState.importData();
+window.deleteProduct = (index) => AppState.deleteProduct(index);
+window.removeFromCart = (index) => AppState.removeFromCart(index);
+window.showReceiptsDetails = (date) => AppState.showReceiptsDetails(date);
+window.viewReportDetails = (index) => AppState.viewReportDetails(index);
     </script>
 </body>
 </html>
+
